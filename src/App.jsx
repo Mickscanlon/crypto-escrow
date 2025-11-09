@@ -9,6 +9,9 @@ import {
   Loader2,
   LogOut,
   Home,
+  Trash2,
+  AlertCircle,
+  MessageCircle,
 } from "lucide-react";
 import { auth, db } from "./firebase";
 import {
@@ -24,6 +27,7 @@ import {
   getDoc,
   getDocs,
   updateDoc,
+  deleteDoc,
   query,
   where,
   serverTimestamp,
@@ -31,6 +35,7 @@ import {
 } from "firebase/firestore";
 
 const ESCROW_WALLET = "bc1qsjk265qpnpzndl8439tmelxzgd8qnnwewrkrf7";
+const ADMIN_SIGNAL = "@cryptoescrow.01"; // Replace with actual Signal username
 
 export default function CryptoEscrowApp() {
   const [currentPage, setCurrentPage] = useState("auth");
@@ -63,8 +68,14 @@ export default function CryptoEscrowApp() {
         setCurrentUser(user);
         const userDoc = await getDoc(doc(db, "users", user.uid));
         if (userDoc.exists()) {
-          setUserProfile(userDoc.data());
-          setCurrentPage("dashboard");
+          const userData = userDoc.data();
+          setUserProfile(userData);
+          // Admin goes straight to admin panel
+          if (userData.isAdmin) {
+            setCurrentPage("admin");
+          } else {
+            setCurrentPage("dashboard");
+          }
         }
       } else {
         setCurrentUser(null);
@@ -140,7 +151,22 @@ export default function CryptoEscrowApp() {
         await signInWithEmailAndPassword(auth, email, password);
       }
     } catch (error) {
-      setAuthError(error.message);
+      // User-friendly error messages
+      if (
+        error.code === "auth/invalid-credential" ||
+        error.code === "auth/user-not-found" ||
+        error.code === "auth/wrong-password"
+      ) {
+        setAuthError("Invalid email or password. Please try again.");
+      } else if (error.code === "auth/email-already-in-use") {
+        setAuthError("This email is already registered. Please login instead.");
+      } else if (error.code === "auth/weak-password") {
+        setAuthError("Password should be at least 6 characters.");
+      } else if (error.code === "auth/invalid-email") {
+        setAuthError("Please enter a valid email address.");
+      } else {
+        setAuthError("An error occurred. Please try again.");
+      }
       setLoading(false);
     }
   };
@@ -166,7 +192,6 @@ export default function CryptoEscrowApp() {
         alert("Cannot invite yourself");
         return;
       }
-      FFF;
 
       const txId = "TX" + Date.now();
       const txData = {
@@ -183,6 +208,7 @@ export default function CryptoEscrowApp() {
         buyerWallet: txForm.role === "buyer" ? userProfile.wallet : "",
         createdAt: Date.now(),
         participants: [currentUser.uid, invitedUid],
+        paymentSent: false,
         paymentReceived: false,
         goodsReleased: false,
         buyerApproved: false,
@@ -219,6 +245,13 @@ export default function CryptoEscrowApp() {
     });
   };
 
+  const markPaymentSent = async (txId) => {
+    await updateDoc(doc(db, "transactions", txId), {
+      paymentSent: true,
+      status: "awaiting_confirmation",
+    });
+  };
+
   const markPaymentReceived = async (txId) => {
     await updateDoc(doc(db, "transactions", txId), {
       paymentReceived: true,
@@ -245,6 +278,34 @@ export default function CryptoEscrowApp() {
     await updateDoc(doc(db, "transactions", txId), {
       status: "rejected",
     });
+  };
+
+  const deleteTransaction = async (txId) => {
+    if (
+      window.confirm(
+        "Are you sure you want to delete this transaction? This action cannot be undone."
+      )
+    ) {
+      try {
+        await deleteDoc(doc(db, "transactions", txId));
+        if (currentPage === "details") {
+          setCurrentPage("dashboard");
+        }
+      } catch (error) {
+        alert("Error deleting transaction: " + error.message);
+      }
+    }
+  };
+
+  const canDeleteTransaction = (tx) => {
+    // Can delete if: rejected, pending_acceptance, waiting_payment, or awaiting_confirmation
+    const deletableStatuses = [
+      "rejected",
+      "pending_acceptance",
+      "waiting_payment",
+      "awaiting_confirmation",
+    ];
+    return deletableStatuses.includes(tx.status);
   };
 
   const isAdmin = userProfile?.isAdmin || false;
@@ -302,7 +363,7 @@ export default function CryptoEscrowApp() {
                 />
                 <input
                   type="text"
-                  placeholder="Your Crypto Wallet Address"
+                  placeholder="Your BTC Wallet Address"
                   value={wallet}
                   onChange={(e) => setWallet(e.target.value)}
                   className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -361,29 +422,33 @@ export default function CryptoEscrowApp() {
           </div>
 
           <div className="flex gap-4">
-            <button
-              onClick={() => setCurrentPage("dashboard")}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
-                currentPage === "dashboard"
-                  ? "bg-indigo-100 text-indigo-700"
-                  : "text-gray-600 hover:bg-gray-100"
-              }`}
-            >
-              <Home className="w-4 h-4" />
-              Dashboard
-            </button>
+            {!isAdmin && (
+              <>
+                <button
+                  onClick={() => setCurrentPage("dashboard")}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
+                    currentPage === "dashboard"
+                      ? "bg-indigo-100 text-indigo-700"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  <Home className="w-4 h-4" />
+                  Dashboard
+                </button>
 
-            <button
-              onClick={() => setCurrentPage("create")}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
-                currentPage === "create"
-                  ? "bg-indigo-100 text-indigo-700"
-                  : "text-gray-600 hover:bg-gray-100"
-              }`}
-            >
-              <Plus className="w-4 h-4" />
-              New Transaction
-            </button>
+                <button
+                  onClick={() => setCurrentPage("create")}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition ${
+                    currentPage === "create"
+                      ? "bg-indigo-100 text-indigo-700"
+                      : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                  New Transaction
+                </button>
+              </>
+            )}
 
             {isAdmin && (
               <button
@@ -395,7 +460,7 @@ export default function CryptoEscrowApp() {
                 }`}
               >
                 <Shield className="w-4 h-4" />
-                Admin
+                Admin Panel
               </button>
             )}
           </div>
@@ -498,16 +563,28 @@ export default function CryptoEscrowApp() {
                       </p>
                     </div>
 
-                    <button
-                      onClick={() => {
-                        setSelectedTx(tx);
-                        setCurrentPage("details");
-                      }}
-                      className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition flex items-center justify-center gap-2"
-                    >
-                      View Details
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => {
+                          setSelectedTx(tx);
+                          setCurrentPage("details");
+                        }}
+                        className="flex-1 bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition flex items-center justify-center gap-2"
+                      >
+                        View Details
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+
+                      {canDeleteTransaction(tx) && (
+                        <button
+                          onClick={() => deleteTransaction(tx.id)}
+                          className="bg-red-100 text-red-700 px-4 py-3 rounded-lg font-medium hover:bg-red-200 transition flex items-center justify-center gap-2"
+                          title="Delete transaction"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -529,6 +606,26 @@ export default function CryptoEscrowApp() {
             <h2 className="text-3xl font-bold text-gray-800 mb-6">
               Create New Transaction
             </h2>
+
+            {/* Important Notice */}
+            <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6">
+              <div className="flex">
+                <AlertCircle className="w-5 h-5 text-yellow-400 mr-3 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-semibold text-yellow-800 mb-1">
+                    Important: Be Specific in Transaction Terms
+                  </h3>
+                  <p className="text-sm text-yellow-700">
+                    Clearly outline all details of what is being bought/sold in
+                    the "Terms" section below. This is crucial for dispute
+                    resolution. Agreements made on other platforms (Discord,
+                    Telegram, etc.) can be manipulated or edited. Only what is
+                    written here will be considered by the admin team if
+                    disputes arise.
+                  </p>
+                </div>
+              </div>
+            </div>
 
             <form onSubmit={createTransaction} className="space-y-6">
               <div>
@@ -573,12 +670,16 @@ export default function CryptoEscrowApp() {
                     type="number"
                     step="0.00000001"
                     required
+                    placeholder="Amount in BTC"
                     value={txForm.amount}
                     onChange={(e) =>
                       setTxForm({ ...txForm, amount: e.target.value })
                     }
                     className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
                   />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Enter the exact BTC amount (not dollar value)
+                  </p>
                 </div>
 
                 <div>
@@ -590,7 +691,8 @@ export default function CryptoEscrowApp() {
                     onChange={(e) =>
                       setTxForm({ ...txForm, currency: e.target.value })
                     }
-                    className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                    disabled
                   >
                     <option value="BTC">BTC</option>
                   </select>
@@ -599,16 +701,24 @@ export default function CryptoEscrowApp() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Terms
+                  Transaction Terms
                 </label>
                 <textarea
                   required
-                  rows={4}
+                  rows={6}
                   value={txForm.terms}
                   onChange={(e) =>
                     setTxForm({ ...txForm, terms: e.target.value })
                   }
-                  placeholder="Describe the transaction..."
+                  placeholder="Be specific! Include:
+• What exactly is being bought/sold
+• Condition of item(s)
+• Delivery method and timeline
+• Any warranties or guarantees
+• Return/refund policy
+• Any other important details
+
+Example: 'Selling 1x iPhone 15 Pro, 256GB, Blue, Factory Unlocked, Brand New Sealed. Will ship via FedEx 2-Day within 24 hours of payment confirmation. Tracking number will be provided. 30-day money-back guarantee if item is not as described.'"
                   className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
                 />
               </div>
@@ -624,6 +734,7 @@ export default function CryptoEscrowApp() {
                   onChange={(e) =>
                     setTxForm({ ...txForm, inviteEmail: e.target.value })
                   }
+                  placeholder="other@example.com"
                   className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
                 />
               </div>
@@ -684,19 +795,60 @@ export default function CryptoEscrowApp() {
                 </p>
               </div>
 
-              <span
-                className={`px-4 py-2 rounded-full text-sm font-medium ${
-                  tx.status === "completed"
-                    ? "bg-green-100 text-green-700"
-                    : tx.status === "rejected"
-                    ? "bg-red-100 text-red-700"
-                    : tx.status === "pending_acceptance"
-                    ? "bg-yellow-100 text-yellow-700"
-                    : "bg-blue-100 text-blue-700"
-                }`}
-              >
-                {tx.status.replace(/_/g, " ").toUpperCase()}
-              </span>
+              <div className="flex items-center gap-3">
+                <span
+                  className={`px-4 py-2 rounded-full text-sm font-medium ${
+                    tx.status === "completed"
+                      ? "bg-green-100 text-green-700"
+                      : tx.status === "rejected"
+                      ? "bg-red-100 text-red-700"
+                      : tx.status === "pending_acceptance"
+                      ? "bg-yellow-100 text-yellow-700"
+                      : "bg-blue-100 text-blue-700"
+                  }`}
+                >
+                  {tx.status.replace(/_/g, " ").toUpperCase()}
+                </span>
+
+                {canDeleteTransaction(tx) && (
+                  <button
+                    onClick={() => deleteTransaction(tx.id)}
+                    className="bg-red-100 text-red-700 px-3 py-2 rounded-lg font-medium hover:bg-red-200 transition flex items-center gap-2"
+                    title="Delete transaction"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Contact Admin */}
+            <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-6">
+              <div className="flex">
+                <MessageCircle className="w-5 h-5 text-blue-400 mr-3 flex-shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-semibold text-blue-800 mb-1">
+                    Need Help or Have a Dispute?
+                  </h3>
+                  <p className="text-sm text-blue-700 mb-2">
+                    <strong>
+                      First, try to resolve any issues directly with the other
+                      party.
+                    </strong>{" "}
+                    If you cannot reach an agreement and need admin assistance,
+                    contact us on Signal.
+                  </p>
+                  <p className="text-sm font-mono text-blue-900 bg-white px-3 py-2 rounded inline-block">
+                    Signal: {ADMIN_SIGNAL}
+                  </p>
+                  <p className="text-xs text-blue-600 mt-2">
+                    <strong>For disputes:</strong> Provide clear proof that
+                    supports your claim. Screenshots, tracking numbers, photos,
+                    and the transaction terms listed below are what the admin
+                    will review.
+                  </p>
+                </div>
+              </div>
             </div>
 
             <div className="grid md:grid-cols-2 gap-6 mb-8">
@@ -754,8 +906,10 @@ export default function CryptoEscrowApp() {
             </div>
 
             <div className="bg-gray-50 rounded-lg p-6 mb-8">
-              <h3 className="font-semibold text-gray-800 mb-3">Terms</h3>
-              <p className="text-gray-700">{tx.terms}</p>
+              <h3 className="font-semibold text-gray-800 mb-3">
+                Transaction Terms
+              </h3>
+              <p className="text-gray-700 whitespace-pre-wrap">{tx.terms}</p>
             </div>
 
             <div className="mb-8">
@@ -771,7 +925,22 @@ export default function CryptoEscrowApp() {
                   >
                     <Check className="w-5 h-5 text-white" />
                   </div>
-                  <p className="text-gray-700">Accepted</p>
+                  <p className="text-gray-700">Transaction Accepted</p>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-8 h-8 rounded-full flex items-center justify-center ${
+                      tx.paymentSent ? "bg-green-500" : "bg-gray-300"
+                    }`}
+                  >
+                    {tx.paymentSent ? (
+                      <Check className="w-5 h-5 text-white" />
+                    ) : (
+                      <Loader2 className="w-5 h-5 text-white" />
+                    )}
+                  </div>
+                  <p className="text-gray-700">Seller Marked Payment Sent</p>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -786,7 +955,9 @@ export default function CryptoEscrowApp() {
                       <Loader2 className="w-5 h-5 text-white" />
                     )}
                   </div>
-                  <p className="text-gray-700">Payment Received</p>
+                  <p className="text-gray-700">
+                    Admin Confirmed Payment in Escrow
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -801,7 +972,9 @@ export default function CryptoEscrowApp() {
                       <Loader2 className="w-5 h-5 text-white" />
                     )}
                   </div>
-                  <p className="text-gray-700">Goods Released</p>
+                  <p className="text-gray-700">
+                    Seller Released Goods/Services
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -816,7 +989,9 @@ export default function CryptoEscrowApp() {
                       <Loader2 className="w-5 h-5 text-white" />
                     )}
                   </div>
-                  <p className="text-gray-700">Completed</p>
+                  <p className="text-gray-700">
+                    Buyer Approved & Funds Released
+                  </p>
                 </div>
               </div>
             </div>
@@ -829,7 +1004,7 @@ export default function CryptoEscrowApp() {
                     className="flex-1 bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition flex items-center justify-center gap-2"
                   >
                     <Check className="w-5 h-5" />
-                    Accept
+                    Accept Transaction
                   </button>
                   <button
                     onClick={() => rejectTransaction(tx.id)}
@@ -841,25 +1016,70 @@ export default function CryptoEscrowApp() {
                 </div>
               )}
 
-              {tx.status === "waiting_payment" && (
+              {tx.status === "pending_acceptance" && isCreator && (
                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
                   <p className="font-semibold text-yellow-800 mb-2">
-                    ⏳ Waiting for Payment
+                    ⏳ Awaiting Response
                   </p>
-                  {isBuyer && (
-                    <p className="text-yellow-700">
-                      Send{" "}
-                      <strong>
-                        {tx.amount} {tx.currency}
-                      </strong>{" "}
-                      to escrow wallet. Admin will confirm.
+                  <p className="text-yellow-700">
+                    Waiting for the other party to accept or reject this
+                    transaction.
+                  </p>
+                </div>
+              )}
+
+              {tx.status === "waiting_payment" &&
+                isSeller &&
+                !tx.paymentSent && (
+                  <div className="space-y-4">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+                      <p className="font-semibold text-blue-800 mb-2">
+                        💰 Send Payment to Escrow
+                      </p>
+                      <p className="text-blue-700 mb-3">
+                        Send <strong>{tx.amount} BTC</strong> to the escrow
+                        wallet address shown above.
+                      </p>
+                      <p className="text-blue-600 text-sm">
+                        Once you've sent the payment, mark it as sent below. The
+                        admin will then verify the transaction on the blockchain
+                        and confirm receipt.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => markPaymentSent(tx.id)}
+                      className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition"
+                    >
+                      I've Sent the Payment to Escrow
+                    </button>
+                  </div>
+                )}
+
+              {tx.status === "waiting_payment" &&
+                isBuyer &&
+                !tx.paymentSent && (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+                    <p className="font-semibold text-yellow-800 mb-2">
+                      ⏳ Waiting for Seller Payment
                     </p>
-                  )}
-                  {isSeller && (
                     <p className="text-yellow-700">
-                      Waiting for buyer payment confirmation.
+                      Waiting for the seller to send payment to the escrow
+                      wallet.
                     </p>
-                  )}
+                  </div>
+                )}
+
+              {(tx.status === "awaiting_confirmation" ||
+                (tx.paymentSent && !tx.paymentReceived)) && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
+                  <p className="font-semibold text-yellow-800 mb-2">
+                    ⏳ Awaiting Admin Confirmation
+                  </p>
+                  <p className="text-yellow-700">
+                    {isSeller && "You've marked the payment as sent. "}
+                    The admin is verifying the payment on the blockchain. This
+                    usually takes a few minutes to a few hours.
+                  </p>
                 </div>
               )}
 
@@ -869,17 +1089,18 @@ export default function CryptoEscrowApp() {
                   <div className="space-y-4">
                     <div className="bg-green-50 border border-green-200 rounded-lg p-6">
                       <p className="font-semibold text-green-800 mb-2">
-                        ✅ Payment Received!
+                        ✅ Payment Confirmed in Escrow!
                       </p>
                       <p className="text-green-700">
-                        Release goods/services to buyer.
+                        The admin has confirmed your payment is in escrow. Now
+                        release the goods/services to the buyer.
                       </p>
                     </div>
                     <button
                       onClick={() => markGoodsReleased(tx.id)}
                       className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition"
                     >
-                      Confirm Goods Released
+                      Confirm Goods/Services Released
                     </button>
                   </div>
                 )}
@@ -892,7 +1113,8 @@ export default function CryptoEscrowApp() {
                       💰 Payment Confirmed
                     </p>
                     <p className="text-blue-700">
-                      Waiting for seller to release goods.
+                      The payment is secured in escrow. Waiting for the seller
+                      to release the goods/services.
                     </p>
                   </div>
                 )}
@@ -903,17 +1125,24 @@ export default function CryptoEscrowApp() {
                   <div className="space-y-4">
                     <div className="bg-green-50 border border-green-200 rounded-lg p-6">
                       <p className="font-semibold text-green-800 mb-2">
-                        📦 Goods Released!
+                        📦 Goods/Services Released!
                       </p>
-                      <p className="text-green-700">
-                        Inspect and approve to release funds.
+                      <p className="text-green-700 mb-3">
+                        The seller has released the goods/services. Please
+                        inspect everything carefully.
+                      </p>
+                      <p className="text-green-600 text-sm">
+                        If everything is as described in the terms above,
+                        approve the transaction to release funds to the seller.
+                        If there's an issue, contact the seller first to try to
+                        resolve it. If that fails, contact the admin on Signal.
                       </p>
                     </div>
                     <button
                       onClick={() => approveFunds(tx.id)}
                       className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition"
                     >
-                      Approve & Release Funds
+                      ✓ Everything is Good - Release Funds to Seller
                     </button>
                   </div>
                 )}
@@ -923,10 +1152,12 @@ export default function CryptoEscrowApp() {
                 !tx.buyerApproved && (
                   <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6">
                     <p className="font-semibold text-yellow-800 mb-2">
-                      ⏳ Awaiting Approval
+                      ⏳ Awaiting Buyer Approval
                     </p>
                     <p className="text-yellow-700">
-                      Waiting for buyer to approve.
+                      Waiting for the buyer to inspect and approve. Once
+                      approved, the escrowed funds will be released to your
+                      wallet.
                     </p>
                   </div>
                 )}
@@ -934,19 +1165,26 @@ export default function CryptoEscrowApp() {
               {tx.completed && (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-6">
                   <p className="font-semibold text-green-800 mb-2">
-                    🎉 Complete!
+                    🎉 Transaction Complete!
                   </p>
                   <p className="text-green-700">
-                    {isSeller && `Funds released to: ${tx.sellerWallet}`}
-                    {isBuyer && `Transaction completed successfully.`}
+                    {isSeller &&
+                      `The funds have been released to your wallet: ${tx.sellerWallet}`}
+                    {isBuyer &&
+                      `Transaction completed successfully. Thank you for using CryptoEscrow!`}
                   </p>
                 </div>
               )}
 
               {tx.status === "rejected" && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-6">
-                  <p className="font-semibold text-red-800 mb-2">❌ Rejected</p>
-                  <p className="text-red-700">This transaction was rejected.</p>
+                  <p className="font-semibold text-red-800 mb-2">
+                    ❌ Transaction Rejected
+                  </p>
+                  <p className="text-red-700">
+                    This transaction was rejected and will not proceed. No funds
+                    were exchanged.
+                  </p>
                 </div>
               )}
             </div>
@@ -969,7 +1207,9 @@ export default function CryptoEscrowApp() {
             <h2 className="text-3xl font-bold text-gray-800 mb-2">
               Admin Panel
             </h2>
-            <p className="text-gray-600">Manage payment confirmations</p>
+            <p className="text-gray-600">
+              Confirm escrow payments on blockchain
+            </p>
           </div>
 
           <div className="grid gap-6">
@@ -1005,6 +1245,12 @@ export default function CryptoEscrowApp() {
                             {tx.amount} {tx.currency}
                           </span>
                         </p>
+                        <p className="text-gray-600">
+                          Escrow Wallet:{" "}
+                          <span className="font-mono text-xs">
+                            {tx.escrowWallet}
+                          </span>
+                        </p>
                       </div>
                     </div>
 
@@ -1023,13 +1269,28 @@ export default function CryptoEscrowApp() {
                     </span>
                   </div>
 
-                  {tx.status === "waiting_payment" && !tx.paymentReceived && (
+                  <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                    <p className="text-sm font-medium text-gray-700 mb-1">
+                      Terms:
+                    </p>
+                    <p className="text-sm text-gray-600 whitespace-pre-wrap">
+                      {tx.terms}
+                    </p>
+                  </div>
+
+                  {tx.paymentSent && !tx.paymentReceived && (
                     <div className="mt-4">
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3">
+                        <p className="text-sm text-yellow-800">
+                          ⚠️ Seller marked payment as sent. Verify {tx.amount}{" "}
+                          BTC has been received at escrow wallet.
+                        </p>
+                      </div>
                       <button
                         onClick={() => markPaymentReceived(tx.id)}
                         className="bg-green-600 text-white px-6 py-2 rounded-lg font-medium hover:bg-green-700 transition"
                       >
-                        ✓ Mark Payment Received
+                        ✓ Confirm Payment Received in Escrow
                       </button>
                     </div>
                   )}
@@ -1037,7 +1298,15 @@ export default function CryptoEscrowApp() {
                   {tx.paymentReceived && (
                     <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3">
                       <p className="text-sm text-green-700">
-                        ✓ Payment confirmed
+                        ✓ Payment confirmed in escrow
+                      </p>
+                    </div>
+                  )}
+
+                  {tx.status === "waiting_payment" && !tx.paymentSent && (
+                    <div className="mt-4 bg-gray-50 border border-gray-200 rounded-lg p-3">
+                      <p className="text-sm text-gray-600">
+                        Waiting for seller to send payment to escrow...
                       </p>
                     </div>
                   )}
@@ -1047,7 +1316,7 @@ export default function CryptoEscrowApp() {
 
             {allTxs.length === 0 && (
               <div className="bg-white rounded-xl shadow-sm p-12 text-center">
-                <p className="text-gray-500">No transactions</p>
+                <p className="text-gray-500">No transactions to manage</p>
               </div>
             )}
           </div>
