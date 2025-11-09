@@ -81,10 +81,18 @@ export default function CryptoEscrowApp() {
 
   useEffect(() => {
     if (!currentUser) return;
-    const q = query(
-      collection(db, 'transactions'),
-      where('participants', 'array-contains', currentUser.uid)
-    );
+    
+    // If admin, fetch all transactions. Otherwise, fetch only user's transactions
+    let q;
+    if (userProfile?.isAdmin) {
+      q = query(collection(db, 'transactions'));
+    } else {
+      q = query(
+        collection(db, 'transactions'),
+        where('participants', 'array-contains', currentUser.uid)
+      );
+    }
+    
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const txs = [];
       snapshot.forEach((doc) => {
@@ -93,7 +101,7 @@ export default function CryptoEscrowApp() {
       setTransactions(txs.sort((a, b) => b.createdAt - a.createdAt));
     });
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [currentUser, userProfile]);
 
   const handleAuth = async (e) => {
     e.preventDefault();
